@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { supabase, supabaseConfigError } from "@/lib/supabase";
 
 type AttendanceStatus = "present" | "absent" | null;
+type AttendanceRecord = { status: AttendanceStatus; updatedAt: string };
 
 type Employee = { id: string; name: string; active: boolean; sortOrder: number };
 type MenuPosition = { top: number; left: number };
@@ -46,23 +46,28 @@ function statusStyle(status: AttendanceStatus) {
   return { label: "", className: "bg-white text-slate-500 hover:bg-slate-100" };
 }
 
-function createEmployeeId() {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `employee-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 
+async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...options, headers: { "Content-Type": "application/json", ...options?.headers } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
+  return body as T;
+}
+
 export default function Home() {
   const [view, setView] = useState({ year: today.getFullYear(), month: today.getMonth() });
+  const [authStatus, setAuthStatus] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>({});
+  const [attendance, setAttendance] = useState<Record<string, AttendanceRecord>>({});
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(supabaseConfigError);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [savingAttendanceKey, setSavingAttendanceKey] = useState<string | null>(null);
   const [employeeMutationId, setEmployeeMutationId] = useState<string | null>(null);
   const [isAddingEmployee, setIsAddingEmployee] = useState(false);
@@ -75,6 +80,32 @@ export default function Home() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    void apiRequest<{ authenticated: boolean }>("/api/auth/session")
+      .then(({ authenticated }) => setAuthStatus(authenticated ? "authenticated" : "unauthenticated"))
+      .catch(() => setAuthStatus("unauthenticated"));
+  }, []);
+
+  async function login(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPinError(null);
+    try {
+      await apiRequest("/api/auth/login", { method: "POST", body: JSON.stringify({ pin }) });
+      setPin("");
+      setAuthStatus("authenticated");
+    } catch (error) {
+      setPinError(getErrorMessage(error));
+    }
+  }
+
+  async function logout() {
+    await apiRequest("/api/auth/logout", { method: "POST" });
+    setEmployees([]);
+    setAttendance({});
+    setAuthStatus("unauthenticated");
+  }
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
     if (!openMenuId) return;
 
     function handleOutsideClick(event: MouseEvent) {
@@ -98,25 +129,22 @@ export default function Home() {
       document.removeEventListener("mousedown", handleOutsideClick);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [openMenuId]);
+  }, [authStatus, openMenuId]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
     let cancelled = false;
 
     async function loadEmployees() {
       setIsLoadingEmployees(true);
       try {
-        if (!supabase) throw new Error(supabaseConfigError ?? "Supabase is not configured.");
-
-        const { data, error } = await supabase
-          .from("employees")
-          .select("id, name, active, sort_order")
-          .order("sort_order", { ascending: true });
-
-        if (error) {
-          console.error("Supabase employee fetch failed:", error);
-          throw error;
-        }
+        const { employees: data } = await apiRequest<{ employees: Array<{ id: string; name: string; active: boolean; sort_order: number }> }>("/api/employees");
         if (cancelled) return;
         setEmployees((data ?? []).map((employee) => ({
           id: employee.id,
@@ -138,9 +166,10 @@ export default function Home() {
     void loadEmployees();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [authStatus]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
     let cancelled = false;
 
     void import("@/lib/holidays").then(({ getIndonesianHolidays }) => {
@@ -153,41 +182,28 @@ export default function Home() {
     });
 
     return () => { cancelled = true; };
-  }, [view.year]);
+  }, [authStatus, view.year]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
     let cancelled = false;
 
     async function loadAttendance() {
-      if (!supabase) {
-        setIsLoadingAttendance(false);
-        return;
-      }
-
       const startDate = getDateOnlyKey(view.year, view.month, 1);
       const nextMonth = shiftMonth(view.year, view.month, 1);
       const endDate = getDateOnlyKey(nextMonth.year, nextMonth.month, 1);
       setIsLoadingAttendance(true);
       setAttendance({});
 
-      const { data, error } = await supabase
-        .from("attendance")
-        .select("employee_id, date, status")
-        .gte("date", startDate)
-        .lt("date", endDate);
-
+      const { attendance: data } = await apiRequest<{ attendance: Array<{ employee_id: string; date: string; status: AttendanceStatus; updated_at: string }> }>(`/api/attendance?start=${startDate}&end=${endDate}`);
       if (cancelled) return;
-      if (error) {
-        setErrorMessage(`Could not load attendance: ${error.message}`);
-      } else {
-        const monthAttendance: Record<string, AttendanceStatus> = {};
-        for (const record of data ?? []) {
-          if (record.status === "present" || record.status === "absent") {
-            monthAttendance[getDateKey(record.employee_id, view.year, view.month, Number(record.date.slice(8, 10)))] = record.status;
-          }
+      const monthAttendance: Record<string, AttendanceRecord> = {};
+      for (const record of data ?? []) {
+        if (record.status === "present" || record.status === "absent") {
+          monthAttendance[getDateKey(record.employee_id, view.year, view.month, Number(record.date.slice(8, 10)))] = { status: record.status, updatedAt: record.updated_at };
         }
-        setAttendance(monthAttendance);
       }
+      setAttendance(monthAttendance);
       setIsLoadingAttendance(false);
     }
 
@@ -199,7 +215,7 @@ export default function Home() {
     });
 
     return () => { cancelled = true; };
-  }, [view]);
+  }, [authStatus, view]);
 
   const days = useMemo(() => {
     const total = new Date(view.year, view.month + 1, 0).getDate();
@@ -215,26 +231,30 @@ export default function Home() {
 
   const workingDays = days.filter(({ isSunday, holiday }) => !isSunday && !holiday).length;
   const activeEmployees = employees.filter((employee) => employee.active).sort((first, second) => first.sortOrder - second.sortOrder);
-  const getStatus = (employeeId: string, day: number) => attendance[getDateKey(employeeId, view.year, view.month, day)] ?? null;
+  const getAttendance = (employeeId: string, day: number) => attendance[getDateKey(employeeId, view.year, view.month, day)];
+  const getStatus = (employeeId: string, day: number) => getAttendance(employeeId, day)?.status ?? null;
   const totalPresent = activeEmployees.reduce((total, employee) => total + days.filter(({ day, isSunday, holiday }) => !isSunday && !holiday && getStatus(employee.id, day) === "present").length, 0);
   const totalAbsent = activeEmployees.reduce((total, employee) => total + days.filter(({ day, isSunday, holiday }) => !isSunday && !holiday && getStatus(employee.id, day) === "absent").length, 0);
 
   async function toggleAttendance(employeeId: string, day: number) {
-    if (!supabase || savingAttendanceKey) return;
+    if (savingAttendanceKey) return;
     const key = getDateKey(employeeId, view.year, view.month, day);
     const date = getDateOnlyKey(view.year, view.month, day);
-    const nextStatus = cycleStatus(attendance[key] ?? null);
+    const nextStatus = cycleStatus(attendance[key]?.status ?? null);
     setSavingAttendanceKey(key);
     setErrorMessage(null);
 
     try {
-      const result = nextStatus === null
-        ? await supabase.from("attendance").delete().eq("employee_id", employeeId).eq("date", date)
-        : await supabase.from("attendance").upsert({ employee_id: employeeId, date, status: nextStatus }, { onConflict: "employee_id,date" });
-      if (result.error) throw result.error;
+      let updatedAt = new Date().toISOString();
+      if (nextStatus === null) {
+        await apiRequest("/api/attendance", { method: "DELETE", body: JSON.stringify({ employeeId, date }) });
+      } else {
+        const result = await apiRequest<{ attendance: { status: AttendanceStatus; updated_at: string } }>("/api/attendance", { method: "POST", body: JSON.stringify({ employeeId, date, status: nextStatus }) });
+        updatedAt = result.attendance.updated_at;
+      }
       setAttendance((previous) => nextStatus === null
         ? Object.fromEntries(Object.entries(previous).filter(([entryKey]) => entryKey !== key))
-        : { ...previous, [key]: nextStatus });
+        : { ...previous, [key]: { status: nextStatus, updatedAt } });
     } catch (error) {
       setErrorMessage(`Could not save attendance: ${getErrorMessage(error)}`);
     } finally {
@@ -251,16 +271,12 @@ export default function Home() {
     const name = newEmployeeName.trim();
     if (!name) return;
 
-    if (!supabase) return;
-
     const nextSortOrder = employees.reduce((highest, employee) => Math.max(highest, employee.sortOrder), -1) + 1;
-    const employee = { id: createEmployeeId(), name, active: true, sort_order: nextSortOrder };
-    setEmployeeMutationId(employee.id);
+    setEmployeeMutationId("adding");
     setErrorMessage(null);
     try {
-      const { data, error } = await supabase.from("employees").insert(employee).select("id, name, active, sort_order").single();
-      if (error) throw error;
-      setEmployees((current) => [...current, { id: data.id, name: data.name, active: data.active, sortOrder: data.sort_order }]);
+      const { employee } = await apiRequest<{ employee: { id: string; name: string; active: boolean; sort_order: number } }>("/api/employees", { method: "POST", body: JSON.stringify({ name, sortOrder: nextSortOrder }) });
+      setEmployees((current) => [...current, { id: employee.id, name: employee.name, active: employee.active, sortOrder: employee.sort_order }]);
       setNewEmployeeName("");
       setIsAddingEmployee(false);
     } catch (error) {
@@ -271,8 +287,7 @@ export default function Home() {
   }
 
   async function moveEmployee(employeeId: string, direction: -1 | 1) {
-    if (!supabase || employeeMutationId) return;
-    const supabaseClient = supabase;
+    if (employeeMutationId) return;
     const ordered = employees.filter((employee) => employee.active).sort((first, second) => first.sortOrder - second.sortOrder);
     const index = ordered.findIndex((employee) => employee.id === employeeId);
     const targetIndex = index + direction;
@@ -292,16 +307,7 @@ export default function Home() {
     setEmployeeMutationId(employeeId);
     setErrorMessage(null);
     try {
-      const temporarySortOrder = Math.max(...employees.map((employee) => employee.sortOrder), 0) + employees.length + 1;
-      const moveToTemporary = await Promise.all(reordered.map((employee, employeeIndex) =>
-        supabaseClient.from("employees").update({ sort_order: temporarySortOrder + employeeIndex }).eq("id", employee.id)));
-      const temporaryError = moveToTemporary.find(({ error }) => error)?.error;
-      if (temporaryError) throw temporaryError;
-
-      const moveToFinal = await Promise.all(reordered.map((employee, employeeIndex) =>
-        supabaseClient.from("employees").update({ sort_order: finalSortOrders[employeeIndex] }).eq("id", employee.id)));
-      const finalError = moveToFinal.find(({ error }) => error)?.error;
-      if (finalError) throw finalError;
+      await apiRequest("/api/employees/reorder", { method: "POST", body: JSON.stringify({ updates: reordered.map((employee, employeeIndex) => ({ id: employee.id, sortOrder: finalSortOrders[employeeIndex] })) }) });
 
       setEmployees((current) => {
         const updatedSortOrders = new Map(reordered.map((employee, employeeIndex) => [employee.id, finalSortOrders[employeeIndex]]));
@@ -320,12 +326,11 @@ export default function Home() {
 
   async function deactivateEmployee(employee: Employee) {
     const confirmed = window.confirm(`${employee.name} will be hidden from the attendance table. Their historical attendance will be preserved. Continue?`);
-    if (!confirmed || !supabase || employeeMutationId) return;
+    if (!confirmed || employeeMutationId) return;
     setEmployeeMutationId(employee.id);
     setErrorMessage(null);
     try {
-      const { error } = await supabase.from("employees").update({ active: false }).eq("id", employee.id);
-      if (error) throw error;
+      await apiRequest("/api/employees", { method: "PATCH", body: JSON.stringify({ id: employee.id, active: false }) });
       setEmployees((current) => current.map((item) => item.id === employee.id ? { ...item, active: false } : item));
       setOpenMenuId(null);
       setMenuPosition(null);
@@ -335,6 +340,15 @@ export default function Home() {
       setEmployeeMutationId(null);
     }
   }
+
+  if (authStatus === "loading") return <main className="grid min-h-screen place-items-center bg-[#f7f9fc] p-6"><p className="text-sm text-slate-500">Checking access...</p></main>;
+  if (authStatus === "unauthenticated") return <main className="grid min-h-screen place-items-center bg-[#f7f9fc] p-6"><form onSubmit={login} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_4px_24px_rgba(15,23,42,0.05)]"><p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-600">W&amp;W Ban</p><h1 className="mt-2 text-2xl font-bold text-slate-900">Attendance access</h1><p className="mt-2 text-sm text-slate-500">Enter the PIN to continue.</p><input type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value)} className="mt-5 h-11 w-full rounded-xl border border-slate-200 px-3 outline-none ring-emerald-500 focus:ring-2" aria-label="Attendance PIN" /><button type="submit" className="mt-3 h-11 w-full rounded-xl bg-emerald-600 font-semibold text-white hover:bg-emerald-700">Unlock attendance</button>{pinError && <p role="alert" className="mt-3 text-sm text-rose-600">{pinError}</p>}</form></main>;
+
+  const isDateEditable = (day: number, isSunday: boolean, holiday: IndonesianHoliday | undefined, record: AttendanceRecord | undefined) => {
+    const date = getDateOnlyKey(view.year, view.month, day);
+    const todayKey = getDateOnlyKey(today.getFullYear(), today.getMonth(), today.getDate());
+    return date <= todayKey && !isSunday && !holiday && (!record || currentTime - new Date(record.updatedAt).getTime() < 30 * 60 * 1000);
+  };
 
   return <main className="min-h-screen min-w-0 overflow-x-hidden bg-[#f7f9fc] px-3 py-5 sm:px-6 sm:py-6 lg:px-8">
     <div className="mx-auto min-w-0 max-w-[1500px]">
@@ -369,7 +383,7 @@ export default function Home() {
             <input autoFocus value={newEmployeeName} onChange={(event) => setNewEmployeeName(event.target.value)} placeholder="Employee name" aria-label="New employee name" className="h-9 w-36 rounded-lg border border-slate-200 px-3 text-sm outline-none ring-emerald-500 focus:ring-2 sm:w-44" />
             <button type="submit" disabled={Boolean(employeeMutationId)} className="rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60">{employeeMutationId ? "Adding..." : "Add"}</button>
             <button type="button" onClick={() => { setIsAddingEmployee(false); setNewEmployeeName(""); }} className="rounded-lg px-2 text-sm font-semibold text-slate-500 hover:bg-slate-100">Cancel</button>
-          </form> : <button disabled={isLoadingEmployees || Boolean(employeeMutationId) || Boolean(supabaseConfigError)} onClick={() => setIsAddingEmployee(true)} className="self-start rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto">+ Add Employee</button>}
+          </form> : <div className="flex items-center gap-2 self-start sm:self-auto"><button disabled={isLoadingEmployees || Boolean(employeeMutationId)} onClick={() => setIsAddingEmployee(true)} className="rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">+ Add Employee</button><button onClick={() => void logout()} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100">Logout</button></div>}
         </div>
         <div className="w-full max-w-full overflow-x-auto overscroll-x-contain">
           <table className="min-w-max border-collapse">
@@ -390,9 +404,11 @@ export default function Home() {
                 <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-3 py-2.5 text-[13px] font-semibold text-slate-700 sm:px-4 sm:py-3 sm:text-sm"><div className="flex items-center justify-between gap-2 sm:gap-3"><span>{employee.name}</span><button ref={openMenuId === employee.id ? menuButtonRef : undefined} aria-label={`Manage ${employee.name}`} disabled={Boolean(employeeMutationId)} onClick={(event) => { if (openMenuId === employee.id) { setOpenMenuId(null); setMenuPosition(null); return; } const bounds = event.currentTarget.getBoundingClientRect(); setOpenMenuId(employee.id); setMenuPosition({ top: bounds.bottom + 4, left: Math.min(Math.max(8, bounds.right - 176), window.innerWidth - 184) }); }} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-wait disabled:opacity-50 sm:h-8 sm:w-8">⋯</button></div></td>
                 {days.map(({ day, isSunday, holiday }) => {
                   const status = getStatus(employee.id, day);
+                  const record = getAttendance(employee.id, day);
+                  const canEdit = isDateEditable(day, isSunday, holiday, record);
                   const button = statusStyle(status);
                   return <td key={day} title={holiday?.name} className={`h-12 border-b border-r border-slate-200 text-center sm:h-14 ${holiday ? "bg-rose-100/80" : isSunday ? "bg-rose-50/70" : ""}`}>
-                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}`} onClick={() => void toggleAttendance(employee.id, day)} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-wait disabled:opacity-60 ${button.className}`}>{button.label}</button>}
+                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || !canEdit || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}`} onClick={() => void toggleAttendance(employee.id, day)} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.className}`}>{button.label}</button>}
                   </td>;
                 })}
                 <td className="sticky right-0 z-10 border-b border-l border-slate-200 bg-white px-2 text-center"><span className="text-sm font-bold text-emerald-600">{presentDays}{hasFullAttendance && <span className="ml-1" aria-label="Full attendance">⭐</span>}</span></td>
