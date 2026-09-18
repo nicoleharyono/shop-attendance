@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^node -e 'const fs=require\\(\"fs\"\\); const \\{createClient\\}=require\\(\"@supabase/supabase-js\"\\); const env=\\{\\}; for\\(const line of fs\\.readFileSync\\(\"\\.env\\.local\",\"utf8\"\\)\\.split\\(String\\.fromCharCode\\(10\\)\\)\\)\\{const i=line\\.indexOf\\(\"=\"\\); if\\(i>0\\) env\\[line\\.slice\\(0,i\\)\\.trim\\(\\)\\]=line\\.slice\\(i\\+1\\)\\.trim\\(\\);\\} const client=createClient\\(env\\.NEXT_PUBLIC_SUPABASE_URL,env\\.NEXT_PUBLIC_SUPABASE_ANON_KEY\\|\\|env\\.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY\\); client\\.from\\(\"employees\"\\)\\.select\\(\"name,active,sort_order\"\\)\\.eq\\(\"active\",true\\)\\.order\\(\"sort_order\",\\{ascending:true\\}\\)\\.then\\(\\(\\{data,error\\}\\)=>\\{if\\(error\\) throw error; const r=data\\.findIndex\\(\\(e\\)=>e\\.name===\"Rani\"\\); console\\.log\\(JSON\\.stringify\\(\\{activeOrder:data\\.map\\(\\(e\\)=>`\\$\\{e\\.name\\}:\\$\\{e\\.sort_order\\}`\\),raniIndex:r,moveUpTarget:r>0\\?data\\[r-1\\]\\.name:null,raniSortOrder:r>=0\\?data\\[r\\]\\.sort_order:null\\},null,2\\)\\);\\}\\)\\.catch\\(\\(e\\)=>\\{console\\.error\\(e\\.message\\);process\\.exitCode=1\\}\\);'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
