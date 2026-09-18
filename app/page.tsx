@@ -12,7 +12,7 @@ type IndonesianHoliday = { date: string; name: string };
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
 const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-const today = new Date();
+const ATTENDANCE_LOCK_WINDOW_MS = 30 * 60 * 1000;
 
 function getDateKey(employeeId: string, year: number, month: number, day: number) {
   return `${employeeId}-${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -21,6 +21,22 @@ function getDateKey(employeeId: string, year: number, month: number, day: number
 function getDateOnlyKey(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
+
+function getJakartaDateOnlyKey(timestamp = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+const jakartaTodayKey = getJakartaDateOnlyKey();
+const jakartaTodayParts = jakartaTodayKey.split("-").map(Number);
+const jakartaTodayYear = jakartaTodayParts[0];
+const jakartaTodayMonth = jakartaTodayParts[1] - 1;
 
 function shiftMonth(year: number, month: number, amount: number) {
   const date = new Date(year, month + amount, 1);
@@ -58,7 +74,7 @@ async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export default function Home() {
-  const [view, setView] = useState({ year: today.getFullYear(), month: today.getMonth() });
+  const [view, setView] = useState({ year: jakartaTodayYear, month: jakartaTodayMonth });
   const [authStatus, setAuthStatus] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [pin, setPin] = useState("");
@@ -225,7 +241,7 @@ export default function Home() {
       const holiday = holidayYear === view.year
         ? holidays.find((item) => item.date === getDateOnlyKey(view.year, view.month, day))
         : undefined;
-      return { day, date, isSunday: date.getDay() === 0, holiday };
+      return { day, date, isSunday: new Date(Date.UTC(view.year, view.month, day)).getUTCDay() === 0, holiday };
     });
   }, [holidayYear, holidays, view]);
 
@@ -235,6 +251,7 @@ export default function Home() {
   const getStatus = (employeeId: string, day: number) => getAttendance(employeeId, day)?.status ?? null;
   const totalPresent = activeEmployees.reduce((total, employee) => total + days.filter(({ day, isSunday, holiday }) => !isSunday && !holiday && getStatus(employee.id, day) === "present").length, 0);
   const totalAbsent = activeEmployees.reduce((total, employee) => total + days.filter(({ day, isSunday, holiday }) => !isSunday && !holiday && getStatus(employee.id, day) === "absent").length, 0);
+  const currentJakartaDateKey = getJakartaDateOnlyKey(currentTime);
 
   async function toggleAttendance(employeeId: string, day: number) {
     if (savingAttendanceKey) return;
@@ -346,8 +363,8 @@ export default function Home() {
 
   const isDateEditable = (day: number, isSunday: boolean, holiday: IndonesianHoliday | undefined, record: AttendanceRecord | undefined) => {
     const date = getDateOnlyKey(view.year, view.month, day);
-    const todayKey = getDateOnlyKey(today.getFullYear(), today.getMonth(), today.getDate());
-    return date <= todayKey && !isSunday && !holiday && (!record || currentTime - new Date(record.updatedAt).getTime() < 30 * 60 * 1000);
+    const todayKey = currentJakartaDateKey;
+    return date <= todayKey && !isSunday && !holiday && (!record || currentTime - new Date(record.updatedAt).getTime() < ATTENDANCE_LOCK_WINDOW_MS);
   };
 
   return <main className="min-h-screen min-w-0 overflow-x-hidden bg-[#f7f9fc] px-3 py-5 sm:px-6 sm:py-6 lg:px-8">
@@ -390,7 +407,7 @@ export default function Home() {
             <thead><tr>
               <th className="sticky left-0 z-20 min-w-[156px] border-b border-r border-slate-200 bg-white px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-400 sm:min-w-[220px] sm:px-4 sm:text-xs">Employee name</th>
               {days.map(({ day, date, isSunday, holiday }) => {
-                const isToday = !isSunday && !holiday && today.getFullYear() === view.year && today.getMonth() === view.month && day === today.getDate();
+                const isToday = !isSunday && !holiday && getDateOnlyKey(view.year, view.month, day) === currentJakartaDateKey;
                 return <th key={day} title={holiday?.name} className={`min-w-[58px] border-b border-r border-slate-200 p-1.5 text-center sm:min-w-[62px] sm:p-2 ${holiday ? "bg-rose-100 text-rose-700" : isSunday ? "bg-rose-50 text-rose-600" : isToday ? "bg-emerald-50 text-emerald-700" : "bg-white text-slate-600"}`}>
                   <div className="text-[11px] font-semibold uppercase">{weekdayFormatter.format(date)}</div><div className="mt-1 text-sm font-bold">{day}</div>{holiday ? <div className="mt-1 truncate text-[9px] font-bold uppercase tracking-wide text-rose-500">LIBUR</div> : isToday && <div className="mx-auto mt-1 h-1 w-1 rounded-full bg-emerald-500" />}
                 </th>;
