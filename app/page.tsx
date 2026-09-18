@@ -12,7 +12,7 @@ type IndonesianHoliday = { date: string; name: string };
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
 const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-const ATTENDANCE_LOCK_WINDOW_MS = 30 * 60 * 1000;
+const ATTENDANCE_LOCK_WINDOW_MS = 5 * 60 * 1000;
 
 function getDateKey(employeeId: string, year: number, month: number, day: number) {
   return `${employeeId}-${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;

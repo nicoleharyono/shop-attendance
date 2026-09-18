@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   if (isFutureDate(date) || isDayOff(date)) return badRequest("This date is not an editable working day.");
 
   const { data: existing } = await serverSupabase.from("attendance").select("updated_at").eq("employee_id", employeeId).eq("date", date).maybeSingle();
-  if (existing && !isAttendanceEditable(existing.updated_at)) return Response.json({ error: "This attendance cell is locked after 30 minutes." }, { status: 423 });
+  if (existing && !isAttendanceEditable(existing.updated_at)) return Response.json({ error: "This attendance cell is locked after 5 minutes." }, { status: 423 });
   const { data, error } = await serverSupabase.from("attendance").upsert({ employee_id: employeeId, date, status, updated_at: new Date().toISOString() }, { onConflict: "employee_id,date" }).select("employee_id, date, status, updated_at").single();
   if (error) return Response.json({ error: error.message }, { status: 400 });
   return Response.json({ attendance: data });
@@ -44,7 +44,7 @@ export async function DELETE(request: Request) {
   if (isFutureDate(date) || isDayOff(date)) return badRequest("This date is not an editable working day.");
   const { data: existing } = await serverSupabase.from("attendance").select("updated_at").eq("employee_id", employeeId).eq("date", date).maybeSingle();
   if (!existing) return Response.json({ ok: true });
-  if (!isAttendanceEditable(existing.updated_at)) return Response.json({ error: "This attendance cell is locked after 30 minutes." }, { status: 423 });
+  if (!isAttendanceEditable(existing.updated_at)) return Response.json({ error: "This attendance cell is locked after 5 minutes." }, { status: 423 });
   const { error } = await serverSupabase.from("attendance").delete().eq("employee_id", employeeId).eq("date", date);
   if (error) return Response.json({ error: error.message }, { status: 400 });
   return Response.json({ ok: true });

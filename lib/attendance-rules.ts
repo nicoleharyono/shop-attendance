@@ -2,7 +2,7 @@ import "server-only";
 
 import { getHolidayByDate, getIndonesianHolidays } from "@/lib/holidays";
 
-export const ATTENDANCE_LOCK_WINDOW_MS = 30 * 60 * 1000;
+export const ATTENDANCE_LOCK_WINDOW_MS = 5 * 60 * 1000;
 
 export function isValidDateKey(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
