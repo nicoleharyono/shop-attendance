@@ -477,10 +477,16 @@ export default function Home() {
                   const record = getAttendance(employee.id, day);
                   const canEdit = isDateEditable(day, isSunday, holiday, record);
                   const isLocked = Boolean(record && currentTime - new Date(record.updatedAt).getTime() >= ATTENDANCE_LOCK_WINDOW_MS);
-                  const canOverride = isLockedEditMode && isLocked && getDateOnlyKey(view.year, view.month, day) <= currentJakartaDateKey;
+                  const canOverride = isLocked && getDateOnlyKey(view.year, view.month, day) <= currentJakartaDateKey;
                   const button = statusStyle(status);
                   return <td key={day} title={holiday?.name} className={`h-12 border-b border-r border-slate-200 text-center sm:h-14 ${holiday ? "bg-rose-100/80" : isSunday ? "bg-rose-50/70" : ""}`}>
-                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || (!canEdit && !canOverride) || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}${canOverride ? ", correct locked attendance" : ""}`} onClick={() => canEdit ? void toggleAttendance(employee.id, day) : canOverride && status ? openAttendanceCorrection(employee, day, status) : undefined} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.className} ${canOverride ? "ring-2 ring-amber-400 ring-offset-1" : ""}`}>{button.label}</button>}
+                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || (!canEdit && !canOverride) || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}${canOverride ? ", correct locked attendance" : ""}`} title={canOverride ? "Click to correct locked attendance" : undefined} onClick={() => {
+                      if (canOverride) {
+                        if (status) openAttendanceCorrection(employee, day, status);
+                        return;
+                      }
+                      if (canEdit) void toggleAttendance(employee.id, day);
+                    }} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.className} ${canOverride && isLockedEditMode ? "ring-2 ring-amber-400 ring-offset-1" : ""}`}>{button.label}</button>}
                   </td>;
                 })}
                 <td className="sticky right-0 z-10 border-b border-l border-slate-200 bg-white px-2 text-center"><span className="text-sm font-bold text-emerald-600">{presentDays}{hasFullAttendance && <span className="ml-1" aria-label="Full attendance">⭐</span>}</span></td>
