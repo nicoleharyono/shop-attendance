@@ -9,6 +9,7 @@ type AttendanceRecord = { status: AttendanceStatus; updatedAt: string };
 type Employee = { id: string; name: string; active: boolean; sortOrder: number };
 type MenuPosition = { top: number; left: number };
 type IndonesianHoliday = { date: string; name: string };
+type AttendanceCorrection = { employeeId: string; employeeName: string; date: string; day: number; previousStatus: "present" | "absent" };
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
 const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
@@ -85,6 +86,13 @@ export default function Home() {
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [savingAttendanceKey, setSavingAttendanceKey] = useState<string | null>(null);
+  const [isLockedEditMode, setIsLockedEditMode] = useState(false);
+  const [correction, setCorrection] = useState<AttendanceCorrection | null>(null);
+  const [correctionStatus, setCorrectionStatus] = useState<"present" | "absent">("present");
+  const [correctionAdminPassword, setCorrectionAdminPassword] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [isSavingCorrection, setIsSavingCorrection] = useState(false);
   const [employeeMutationId, setEmployeeMutationId] = useState<string | null>(null);
   const [isAddingEmployee, setIsAddingEmployee] = useState(false);
   const [newEmployeeName, setNewEmployeeName] = useState("");
@@ -279,6 +287,51 @@ export default function Home() {
     }
   }
 
+  function openAttendanceCorrection(employee: Employee, day: number, status: "present" | "absent") {
+    setCorrection({
+      employeeId: employee.id,
+      employeeName: employee.name,
+      date: getDateOnlyKey(view.year, view.month, day),
+      day,
+      previousStatus: status,
+    });
+    setCorrectionStatus(status);
+    setCorrectionAdminPassword("");
+    setCorrectionReason("");
+    setCorrectionError(null);
+  }
+
+  async function saveAttendanceCorrection(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!correction || isSavingCorrection) return;
+
+    setIsSavingCorrection(true);
+    setCorrectionError(null);
+    try {
+      const result = await apiRequest<{ attendance: { status: "present" | "absent"; updated_at: string } }>("/api/attendance/override", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId: correction.employeeId,
+          date: correction.date,
+          status: correctionStatus,
+          adminPassword: correctionAdminPassword,
+          reason: correctionReason,
+        }),
+      });
+      const key = getDateKey(correction.employeeId, view.year, view.month, correction.day);
+      setAttendance((previous) => ({
+        ...previous,
+        [key]: { status: result.attendance.status, updatedAt: result.attendance.updated_at },
+      }));
+      setCorrection(null);
+      setIsLockedEditMode(false);
+    } catch (error) {
+      setCorrectionError(getErrorMessage(error));
+    } finally {
+      setIsSavingCorrection(false);
+    }
+  }
+
   function changeMonth(amount: number) {
     setView((current) => shiftMonth(current.year, current.month, amount));
   }
@@ -400,7 +453,7 @@ export default function Home() {
             <input autoFocus value={newEmployeeName} onChange={(event) => setNewEmployeeName(event.target.value)} placeholder="Employee name" aria-label="New employee name" className="h-9 w-36 rounded-lg border border-slate-200 px-3 text-sm outline-none ring-emerald-500 focus:ring-2 sm:w-44" />
             <button type="submit" disabled={Boolean(employeeMutationId)} className="rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60">{employeeMutationId ? "Adding..." : "Add"}</button>
             <button type="button" onClick={() => { setIsAddingEmployee(false); setNewEmployeeName(""); }} className="rounded-lg px-2 text-sm font-semibold text-slate-500 hover:bg-slate-100">Cancel</button>
-          </form> : <div className="flex items-center gap-2 self-start sm:self-auto"><button disabled={isLoadingEmployees || Boolean(employeeMutationId)} onClick={() => setIsAddingEmployee(true)} className="rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">+ Add Employee</button><button onClick={() => void logout()} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100">Logout</button></div>}
+          </form> : <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto"><button type="button" aria-pressed={isLockedEditMode} onClick={() => setIsLockedEditMode((enabled) => !enabled)} className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${isLockedEditMode ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>Edit Locked Attendance</button><button disabled={isLoadingEmployees || Boolean(employeeMutationId)} onClick={() => setIsAddingEmployee(true)} className="rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">+ Add Employee</button><button onClick={() => void logout()} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100">Logout</button></div>}
         </div>
         <div className="w-full max-w-full overflow-x-auto overscroll-x-contain">
           <table className="min-w-max border-collapse">
@@ -423,9 +476,11 @@ export default function Home() {
                   const status = getStatus(employee.id, day);
                   const record = getAttendance(employee.id, day);
                   const canEdit = isDateEditable(day, isSunday, holiday, record);
+                  const isLocked = Boolean(record && currentTime - new Date(record.updatedAt).getTime() >= ATTENDANCE_LOCK_WINDOW_MS);
+                  const canOverride = isLockedEditMode && isLocked && getDateOnlyKey(view.year, view.month, day) <= currentJakartaDateKey;
                   const button = statusStyle(status);
                   return <td key={day} title={holiday?.name} className={`h-12 border-b border-r border-slate-200 text-center sm:h-14 ${holiday ? "bg-rose-100/80" : isSunday ? "bg-rose-50/70" : ""}`}>
-                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || !canEdit || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}`} onClick={() => void toggleAttendance(employee.id, day)} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.className}`}>{button.label}</button>}
+                    {isSunday ? <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">OFF</span> : holiday ? <span className="text-[9px] font-bold uppercase tracking-wider text-rose-500 sm:text-[10px]">LIBUR</span> : <button disabled={isLoadingAttendance || (!canEdit && !canOverride) || savingAttendanceKey === getDateKey(employee.id, view.year, view.month, day)} aria-label={`${employee.name}, day ${day}: ${status ?? "blank"}${canOverride ? ", correct locked attendance" : ""}`} onClick={() => canEdit ? void toggleAttendance(employee.id, day) : canOverride && status ? openAttendanceCorrection(employee, day, status) : undefined} className={`h-10 w-10 rounded-xl text-lg font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${button.className} ${canOverride ? "ring-2 ring-amber-400 ring-offset-1" : ""}`}>{button.label}</button>}
                   </td>;
                 })}
                 <td className="sticky right-0 z-10 border-b border-l border-slate-200 bg-white px-2 text-center"><span className="text-sm font-bold text-emerald-600">{presentDays}{hasFullAttendance && <span className="ml-1" aria-label="Full attendance">⭐</span>}</span></td>
@@ -440,6 +495,29 @@ export default function Home() {
         const employeeIndex = activeEmployees.findIndex((item) => item.id === employee.id);
         return createPortal(<div ref={menuRef} className="fixed z-[100] w-44 rounded-xl border border-slate-200 bg-white p-1.5 text-left text-xs font-semibold shadow-xl" style={{ top: menuPosition.top, left: menuPosition.left }}><button disabled={employeeIndex === 0 || Boolean(employeeMutationId)} onClick={() => void moveEmployee(employee.id, -1)} className="block w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300">↑ Move up</button><button disabled={employeeIndex === activeEmployees.length - 1 || Boolean(employeeMutationId)} onClick={() => void moveEmployee(employee.id, 1)} className="block w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300">↓ Move down</button><button disabled={Boolean(employeeMutationId)} onClick={() => void deactivateEmployee(employee)} className="block w-full rounded-lg px-3 py-2 text-left text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50">Deactivate</button></div>, document.body);
       })()}
+      {correction && <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSavingCorrection) setCorrection(null); }}>
+        <form onSubmit={saveAttendanceCorrection} role="dialog" aria-modal="true" aria-labelledby="correction-title" className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+          <h2 id="correction-title" className="text-lg font-bold text-slate-900">Correct locked attendance</h2>
+          <p className="mt-1 text-sm text-slate-500">{correction.employeeName} · {correction.date}</p>
+          <label className="mt-4 block text-sm font-semibold text-slate-700">Attendance status
+            <select value={correctionStatus} onChange={(event) => setCorrectionStatus(event.target.value as "present" | "absent")} className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100">
+              <option value="present">Present</option>
+              <option value="absent">Absent</option>
+            </select>
+          </label>
+          <label className="mt-3 block text-sm font-semibold text-slate-700">Reason
+            <textarea required maxLength={1000} value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} rows={3} className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 p-3 text-sm font-normal outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+          </label>
+          <label className="mt-3 block text-sm font-semibold text-slate-700">Admin password
+            <input required type="password" autoComplete="current-password" value={correctionAdminPassword} onChange={(event) => setCorrectionAdminPassword(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+          </label>
+          {correctionError && <p role="alert" className="mt-3 text-sm text-rose-600">{correctionError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" disabled={isSavingCorrection} onClick={() => setCorrection(null)} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={isSavingCorrection || correctionStatus === correction.previousStatus || !correctionReason.trim() || !correctionAdminPassword} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isSavingCorrection ? "Saving..." : "Save correction"}</button>
+          </div>
+        </form>
+      </div>}
     </div>
   </main>;
 }

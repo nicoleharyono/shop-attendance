@@ -17,7 +17,21 @@ export function isPinConfigured() {
 }
 
 export function isValidPin(pin: unknown) {
-  return typeof pin === "string" && Boolean(process.env.ATTENDANCE_PIN) && pin === process.env.ATTENDANCE_PIN;
+  if (typeof pin !== "string" || !process.env.ATTENDANCE_PIN) return false;
+  const expectedBuffer = Buffer.from(process.env.ATTENDANCE_PIN);
+  const receivedBuffer = Buffer.from(pin);
+  return receivedBuffer.length === expectedBuffer.length && timingSafeEqual(receivedBuffer, expectedBuffer);
+}
+
+export function isAdminPasswordConfigured() {
+  return Boolean(process.env.ADMIN_PASSWORD);
+}
+
+export function isValidAdminPassword(password: unknown) {
+  if (typeof password !== "string" || !process.env.ADMIN_PASSWORD) return false;
+  const expectedBuffer = Buffer.from(process.env.ADMIN_PASSWORD);
+  const receivedBuffer = Buffer.from(password);
+  return receivedBuffer.length === expectedBuffer.length && timingSafeEqual(receivedBuffer, expectedBuffer);
 }
 
 export function createSessionToken() {
